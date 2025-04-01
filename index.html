@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BlazePose Web12</title>
+  <style>
+    body {
+      text-align: center;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+                     'Apple Color Emoji', 'Segoe UI Emoji', Arial, sans-serif;
+      font-size: 16px;
+      color: #111;
+      background-color: #fff;
+      margin: 0;
+      padding: 0;
+    }
+
+    #container {
+      position: relative;
+      display: inline-block;
+      margin: 0 auto;
+      border: 2px dashed #ccc;
+    }
+
+    video, canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 0;
+    }
+
+    canvas {
+      z-index: 1;
+    }
+
+    #controls {
+      margin-top: 10px;
+    }
+
+    button {
+      margin: 10px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <h2> Realtime pose9</h2>
+
+  <div id="container">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="canvas"></canvas>
+  </div>
+  <div style="margin-bottom: 10px;">
+    <label for="username">Name: </label>
+    <input type="text" id="username" placeholder="John" style="font-size: 16px; padding: 5px;">
+  </div>
+
+  <div id="controls">
+    <button onclick="startRecording()">🔴 Start</button>
+    <button onclick="stopRecording()">⏹️ End</button>
+    <button onclick="toggleCamera()">📷 카메라 전환</button>
+  </div>
+  <div id="status" style="margin-top: 10px; font-weight: bold; font-size: 16px;"></div>
+
+  <!-- TensorFlow + BlazePose -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-core"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-converter"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
+
+  <script>
+
+
+
+    
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+
+    let recording = false;
+    let csvData = [];
+    let currentFacingMode = 'user';
+    let detector;
+    let timestamps = [];
+    let arucoDetector;
+    
+    const excludeIndices = [1, 2, 3, 4, 5, 6, 9, 10, 17, 18, 21, 22];
+    const keypointNames = [
+      "nose",              // 0
+     // null, null, null,    // 1-3 left eye
+     // null, null, null,    // 4-6 right eye
+      "left_ear",          // 7
+      "right_ear",         // 8
+     // null, null,          // 9-10 mouth
+      "left_shoulder",     // 11
+      "right_shoulder",    // 12
+      "left_elbow",        // 13
+      "right_elbow",       // 14
+      "left_wrist",        // 15
+      "right_wrist",       // 16
+      //null, null,          // 17-18 pinky
+      "left_index",        // 19
+      "right_index", 
+      //null,                // 21 (left_thumb 제외)
+      //"right_thumb",       // 22
+      "left_hip",          // 23
+      "right_hip",         // 24
+      "left_knee",         // 25
+      "right_knee",        // 26
+      "left_ankle",        // 27
+      "right_ankle",       // 28
+      "left_heel",         // 29
+      "right_heel",        // 30
+      "left_foot_index",   // 31
+      "right_foot_index",  // 32
+    ];
+
+    const skeletonEdges = [
+      [0, 1], [1, 2], [2, 0],
+      [3, 4], [3, 11], [4, 12], [11, 12],
+      [3, 5], [5, 7], [7, 9], [7, 23], [7, 24],
+      [4, 6], [6, 8], [8, 10], [8, 25], [8, 26],
+      [11, 13], [13, 15], [15, 17], [17, 19],
+      [12, 14], [14, 16], [16, 18], [18, 20],
+      [0, 21], [21, 11], [21, 12], [0, 22]
+    ];
+
+    async function setupCamera(facingMode = 'user') {
+      if (video.srcObject) {
+        video.srcObject.getTracks().forEach(track => track.stop());
+      }
+      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
+      video.srcObject = stream;
+      return new Promise(resolve => {
+        video.onloadedmetadata = () => {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          video.width = video.videoWidth;
+          video.height = video.videoHeight;
+          document.getElementById('container').style.width = video.videoWidth + 'px';
+          document.getElementById('container').style.height = video.videoHeight + 'px';
+          resolve();
+        };
+      });
+    }
+
+    async function toggleCamera() {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoInputs = devices.filter(d => d.kind === 'videoinput');
+      if (videoInputs.length < 2) {
+        alert("🔁 전환 가능한 카메라가 하나뿐입니다.");
+        return;
+      }
+      currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+      await setupCamera(currentFacingMode);
+      render(); // 🔁 새 비디오로 render 재시작
+    }
+    
+    async function render() {
+      if (video.readyState < 2) {
+        requestAnimationFrame(render);
+        return;
+      }
+      
+
+      const poses = await detector.estimatePoses(video);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.save();
+      if (poses.length > 0 && poses[0].keypoints) {
+        const keypoints = poses[0].keypoints;
+        const filteredKeypoints = keypoints.filter((_, i) => !excludeIndices.includes(i));
+
+        filteredKeypoints.forEach((kp, i) => {
+          if (kp.score > 0.4) {
+            ctx.beginPath();
+            ctx.arc(kp.x, kp.y, 5, 0, 2 * Math.PI);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+            ctx.font = '10px sans-serif';
+            ctx.fillStyle = 'blue';
+            ctx.fillText(keypointNames[i], kp.x + 6, kp.y + 6);
+          }
+        });
+
+        skeletonEdges.forEach(([i, j]) => {
+          const kp1 = filteredKeypoints[i];
+          const kp2 = filteredKeypoints[j];
+          if (!kp1 || !kp2) return;
+          if (kp1.score > 0.4 && kp2.score > 0.4) {
+            ctx.beginPath();
+            ctx.moveTo(kp1.x, kp1.y);
+            ctx.lineTo(kp2.x, kp2.y);
+            ctx.strokeStyle = 'lime';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        });
+
+        
+        
+
+        if (recording) {
+          const row = filteredKeypoints.flatMap(kp => [kp.x, kp.y, kp.score]);
+          csvData.push(row);
+          timestamps.push(Date.now()); // ✅ 각 프레임별 시간 저장
+        }
+      }
+      ctx.restore();
+      requestAnimationFrame(render);
+    }
+
+    async function main() {
+      
+      arucoDetector = new AR.Detector();
+      await setupCamera(currentFacingMode);
+      detector = await poseDetection.createDetector(poseDetection.SupportedModels.BlazePose, {
+        runtime: 'mediapipe',
+        solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose',
+        modelType: 'lite'
+      });
+      render();
+    }
+
+
+
+
+
+    function startRecording() {
+      recording = true;
+      csvData = [];
+      const status = document.getElementById('status');
+      status.innerText = '📡 레코딩 중...';
+      status.style.color = 'red';
+    }
+
+    function stopRecording() {
+      recording = false;
+      document.getElementById('status').innerText = '';
+      const username = document.getElementById('username').value.trim() || 'unknown';
+      const now = new Date();
+      const yyyy = now.getFullYear();
+      const mm = String(now.getMonth() + 1).padStart(2, '0');
+      const dd = String(now.getDate()).padStart(2, '0');
+      const hh = String(now.getHours()).padStart(2, '0');
+      const min = String(now.getMinutes()).padStart(2, '0');
+      const timestamp = `${yyyy}-${mm}-${dd}-${hh}-${min}`;
+      const filename = `${username}_${timestamp}.csv`;
+
+      
+      let header = [];
+      header.push(`time`);
+      keypointNames.forEach((name, i) => {
+        if (!excludeIndices.includes(i)) {
+          header.push(`${name}_x`, `${name}_y`, `${name}_score`);
+        }
+      });
+
+      
+      let csvContent = [header.join(',')];
+      csvData.forEach((row, index) => {
+        const filteredRow = [];
+        filteredRow.push(timestamps[index]); // ✅ 이 시점의 시간
+      
+        row.forEach((val, i) => {
+          const kpIndex = Math.floor(i / 3);
+          if (!excludeIndices.includes(kpIndex)) {
+            filteredRow.push(val);
+          }
+        });
+      
+        csvContent.push(filteredRow.join(','));
+      });
+
+      
+      const blob = new Blob([csvContent.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+    }
+
+    main();
+  </script>
+</body>
+</html>
