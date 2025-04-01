@@ -5,7 +5,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BlazePose Web12</title>
+  <title>BlazePose Web13</title>
   <style>
     body {
       text-align: center;
@@ -73,7 +73,6 @@
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-webgl"></script>
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/pose-detection"></script>
-
   <script>
 
 
@@ -203,6 +202,7 @@
           }
         });
 
+
         
         
 
@@ -218,8 +218,9 @@
 
     async function main() {
       
-      arucoDetector = new AR.Detector();
+     
       await setupCamera(currentFacingMode);
+      
       detector = await poseDetection.createDetector(poseDetection.SupportedModels.BlazePose, {
         runtime: 'mediapipe',
         solutionPath: 'https://cdn.jsdelivr.net/npm/@mediapipe/pose',
@@ -227,8 +228,6 @@
       });
       render();
     }
-
-
 
 
 
